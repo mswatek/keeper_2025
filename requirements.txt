@@ -2,7 +2,6 @@ streamlit
 pandas
 numpy
 plotly.express
-datetime
 requests
 requests_oauthlib
 requests.auth
