@@ -6,7 +6,6 @@ datetime
 requests
 requests_oauthlib
 requests.auth
-xml.etree.ElementTree
 time
 random
 os
