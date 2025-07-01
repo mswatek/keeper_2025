@@ -1,0 +1,35 @@
+name: Daily CSV Update
+
+on:
+  schedule:
+    - cron: '0 23 * * *'  # Runs daily at 08:00 UTC
+  workflow_dispatch:     # Allows manual trigger
+
+jobs:
+  update-csv:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run update script
+        run: python create_tables.py
+
+      - name: Commit updated CSV
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add data/latest_data.csv
+          git commit -m "Daily CSV update: $(date -u +'%Y-%m-%d %H:%M:%S')"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
