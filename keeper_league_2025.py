@@ -252,91 +252,267 @@ with main_tab3:
         st.subheader("🟥 Pitching Stats")
         st.dataframe(pitching_summary)
 
-    # === Active Roster Highlights ===
-    df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-    df = df[df["roster_slot"] != "BN"].copy()
-    df = filter_by_date(df)
-    df["IP"] = pd.to_numeric(df["IP"], errors="coerce")
-    df["ER"] = pd.to_numeric(df.get("ER"), errors="coerce")
-    df["SO"] = pd.to_numeric(df.get("SO"), errors="coerce")
+    # === 🧮 Best & Worst Team Days (Raw Stats Ranked by Composite Z-Score) ===
 
-    st.header("🎯 Active Roster Highlights and Lowlights")
+    player_df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
+    player_df = player_df[(player_df["roster_slot"] != "BN") & 
+                        (player_df["date"] >= pd.to_datetime(start_date)) & 
+                        (player_df["date"] <= pd.to_datetime(end_date))].copy()
+
+    # --- Recalculate rate stats at player level ---
+    player_df["AVG"] = player_df.apply(lambda r: r["H"] / r["AB"] if r["AB"] > 0 else np.nan, axis=1)
+    player_df["OBP"] = player_df.apply(lambda r: (r["H"] + r["BB"] + r["HBP"]) / r["PA"] if r["PA"] > 0 else np.nan, axis=1)
+    player_df["SLG"] = player_df.apply(lambda r: r["TB"] / r["AB"] if r["AB"] > 0 else np.nan, axis=1)
+    player_df["OPS"] = player_df["OBP"] + player_df["SLG"]
+    player_df["ERA"] = player_df.apply(lambda r: (r["ER"] * 9) / r["IP"] if r["IP"] > 0 else np.nan, axis=1)
+    player_df["WHIP"] = player_df.apply(lambda r: (r["BBA"] + r["HA"]) / r["IP"] if r["IP"] > 0 else np.nan, axis=1)
+
+    # Estimate TBF if not provided
+    if "TBF" not in player_df.columns:
+        player_df["TBF"] = player_df["IP"] * 3 + player_df["HA"] + player_df["BBA"]
+
+    # --- Aggregate to team-day level ---
+    agg_dict = {
+        "R": "sum", "HR": "sum", "RBI": "sum", "SB": "sum", "K": "sum",
+        "QS": "sum", "SVH": "sum", "PA": "sum",
+        "AVG": "mean", "OPS": "mean", "ERA": "mean", "WHIP": "mean",
+        "AB": "sum", "IP": "sum", "TBF": "sum", "BBA": "sum"
+    }
+    team_day = player_df.groupby(["team_name", "date"]).agg(agg_dict).reset_index()
+
+    # Calculate K%-BB% from team totals
+    team_day["K%-BB%"] = team_day.apply(
+        lambda r: (r["K"] - r["BBA"]) / r["TBF"] if r["TBF"] > 0 else np.nan,
+        axis=1
+    )
+
+    # List of roto stats for scoring
+    zscore_stats = ['R', 'HR', 'RBI', 'SB', 'AVG', 'OPS', 'K', 'ERA', 'WHIP', 'K%-BB%', 'QS', 'SVH']
+    team_day = team_day.dropna(subset=zscore_stats)
+
+    # --- Z-score calculation ---
+    z_scores = team_day[zscore_stats].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
+
+    # Invert ERA and WHIP (lower is better)
+    for stat in ["ERA", "WHIP"]:
+        if stat in z_scores.columns:
+            z_scores[stat] *= -1
+
+    # Weighting by volume
+    weight_AB = np.sqrt(team_day["AB"]) / np.sqrt(team_day["AB"].max())
+    weight_IP = np.sqrt(team_day["IP"]) / np.sqrt(team_day["IP"].max())
+    weight_TBF = np.sqrt(team_day["TBF"]) / np.sqrt(team_day["TBF"].max())
+
+    if "AVG" in z_scores:       z_scores["AVG"] *= weight_AB
+    if "OPS" in z_scores:       z_scores["OPS"] *= weight_AB
+    if "ERA" in z_scores:       z_scores["ERA"] *= weight_IP
+    if "WHIP" in z_scores:      z_scores["WHIP"] *= weight_IP
+    if "K%-BB%" in z_scores:    z_scores["K%-BB%"] *= weight_TBF
+
+    # Composite z-score
+    team_day["z_total"] = z_scores.sum(axis=1)
+
+    # Find best and worst days
+    best_days = team_day.loc[team_day.groupby("team_name")["z_total"].idxmax()].sort_values("z_total", ascending=False)
+    
+    # Apply PA threshold for worst day evaluation
+    team_day["PA"] = player_df.groupby(["team_name", "date"])["PA"].sum().reindex(team_day.set_index(["team_name", "date"]).index).values
+    eligible_for_worst = team_day[team_day["PA"] >= 30].copy()
+
+    # Now identify worst days only among those that meet the PA threshold
+    worst_days = eligible_for_worst.loc[eligible_for_worst.groupby("team_name")["z_total"].idxmin()].sort_values("z_total")
+
+    display_cols = ["team_name", "date", "PA", "R", "HR", "RBI", "SB", "AVG", "OPS", "IP", "K", "ERA", "WHIP", "K%-BB%", "QS", "SVH"]
+
+    # --- Display raw stats, ranked by z_total ---
+    st.header("💫 Best and Worst Team Days (Raw Stats Ranked by Composite Z-Score)")
+
+    tabs = st.tabs(["📈 Best Day Per Team", "📉 Worst Day Per Team"])
+
+    with tabs[0]:
+        st.subheader("📈 Best Day Per Team")
+        st.dataframe(best_days[display_cols].reset_index(drop=True), use_container_width=True)
+
+    with tabs[1]:
+        st.subheader("📉 Worst Day Per Team (Min 30 PA)")
+        st.dataframe(worst_days[display_cols].reset_index(drop=True), use_container_width=True)
+
+    st.header("🏅 Team Highlights")
+
+    # Load & clean data
+    df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
+    df = filter_by_date(df)
+
+    # Ensure numeric columns
+    for col in ["IP", "ER", "SO", "QS", "SVH", "BSV", "SLAM", "HR", "SB", "H", "PC", "K", "AB"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     teams = sorted(df["team_name"].unique())
     selected_team = st.selectbox("Select a team:", teams)
 
-    st.subheader("🟪 Near-Quality Starts (= 5.667 IP & ≤ 3 ER)")
-    qs_df = df[(df["team_name"] == selected_team) & (df["IP"] == 5.667) & (df["ER"] <= 3)][["date", "player_name", "IP", "ER"]]
-    st.dataframe(qs_df, use_container_width=True)
+    active_df = df[(df["team_name"] == selected_team) & (df["roster_slot"] != "BN")].copy()
+    bench_df = df[(df["team_name"] == selected_team) & (df["roster_slot"] == "BN")].copy()
 
-    st.subheader("🟦 Golden Sombreros (4+ Strikeouts)")
-    k_df = df[(df["team_name"] == selected_team) & (df["SO"] >= 4)][["date", "player_name", "SO", "AB"]]
-    st.dataframe(k_df, use_container_width=True)
+    # =======================
+    # Helper function
+    # =======================
+    def paired_stat(title, active_filter, bench_filter, active_cols, bench_cols=None):
+        bench_cols = bench_cols or active_cols
+        col1, col2 = st.columns(2)
 
-    # === Bench Events ===
-    st.header("🚨 Bench Highlights and Lowlights")
+        try:
+            active_filtered = active_df.loc[active_filter].copy()
+            bench_filtered = bench_df.loc[bench_filter].copy()
 
-    bench_df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-    bench_df = bench_df[bench_df["roster_slot"] == "BN"].copy()
-    bench_df = filter_by_date(bench_df)
+            active_table = active_filtered[["date", "player_name"] + active_cols].dropna(subset=active_cols)
+            bench_table = bench_filtered[["date", "player_name"] + bench_cols].dropna(subset=bench_cols)
 
-    cols_to_check = ["HR", "SB", "SO", "ER", "QS", "SVH", "SLAM", "H", "PC", "K", "AB"]
-    for col in cols_to_check + ["IP"]:
-        if col in bench_df.columns:
-            bench_df[col] = pd.to_numeric(bench_df[col], errors="coerce")
+        except Exception as e:
+            st.error(f"Error in '{title}': {e}")
+            return
 
-    bench_teams = sorted(bench_df["team_name"].unique())
-    bench_tabs = st.tabs([f"🪑 {team}" for team in bench_teams])
+        with col1:
+            st.markdown(f"**Active: {title}**")
+            if not active_table.empty:
+                st.dataframe(active_table.head(100), use_container_width=True)
+            else:
+                st.info("No results on active roster.")
 
-    for team, tab in zip(bench_teams, bench_tabs):
-        with tab:
-            team_df = bench_df[bench_df["team_name"] == team]
-            summary = {
-                "HR_SB": ((team_df["HR"] >= 1) & (team_df["SB"] >= 1)).sum(),
-                "HR2": (team_df["HR"] >= 2).sum(),
-                "QS": team_df["QS"].fillna(0).astype(int).sum() if "QS" in team_df.columns else 0,
-                "SVH": team_df["SVH"].fillna(0).astype(int).sum() if "SVH" in team_df.columns else 0,
-                "SLAM": team_df["SLAM"].fillna(0).astype(int).sum() if "SLAM" in team_df.columns else 0,
-                "ER5": (team_df["ER"] >= 5).sum(),
-                "SO4": (team_df["SO"] >= 4).sum(),
-            }
+        with col2:
+            st.markdown(f"**Bench: {title}**")
+            if not bench_table.empty:
+                st.dataframe(bench_table.head(100), use_container_width=True)
+            else:
+                st.info("No results on bench.")
 
-            st.markdown(f"""
-            🧾 **Summary**: {team} missed out on  
-            • `{summary['HR_SB']}` HR+SB combos  
-            • `{summary['HR2']}` multi-HR games  
-            • `{summary['QS']}` Quality Starts  
-            • `{summary['SVH']}` Saves+Holds  
-            • `{summary['SLAM']}` Grand Slams  
+    # =======================
+    # Custom layout blocks
+    # =======================
 
-            But they also dodged  
-            • `{summary['ER5']}` outings with 5+ ER  
-            • `{summary['SO4']}` 4+ strikeout appearances left on the bench.
-            """, unsafe_allow_html=True)
+    # 1️⃣ Near-Quality Starts + Bench QS
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Active: Near-Quality Starts (5.667 IP & ≤ 3 ER)**")
+        nqs = active_df[(active_df["IP"] == 5.667) & (active_df["ER"] <= 3)][["date", "player_name", "IP", "ER"]]
+        if not nqs.empty:
+            st.dataframe(nqs.head(100), use_container_width=True)
+        else:
+            st.info("No near-quality starts on active roster.")
+    with col2:
+        st.markdown("**Bench: Quality Starts (QS ≥ 1)**")
+        qs_bench = bench_df[bench_df["QS"] >= 1][["date", "player_name", "IP", "ER", "QS"]]
+        if not qs_bench.empty:
+            st.dataframe(qs_bench.head(100), use_container_width=True)
+        else:
+            st.info("No quality starts on bench.")
 
-            st.subheader("Combo Meals (💣 HR + SB on Bench)")
-            st.dataframe(team_df[(team_df["HR"] >= 1) & (team_df["SB"] >= 1)][["date", "player_name", "HR", "SB"]])
+    # 2️⃣ Blown Saves + Bench SVH
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Active: Blown Saves (BSV ≥ 1)**")
+        bsv = active_df[active_df.get("BSV", 0) >= 1][["date", "player_name", "BSV"]]
+        if not bsv.empty:
+            st.dataframe(bsv.head(100), use_container_width=True)
+        else:
+            st.info("No blown saves on active roster.")
+    with col2:
+        st.markdown("**Bench: Saves + Holds (SVH ≥ 1)**")
+        svh = bench_df[bench_df.get("SVH", 0) >= 1][["date", "player_name", "PC", "SVH"]]
+        if not svh.empty:
+            st.dataframe(svh.head(100), use_container_width=True)
+        else:
+            st.info("No saves or holds on bench.")
 
-            st.subheader("🔁 Multi-HR Games (2+)")
-            st.dataframe(team_df[team_df["HR"] >= 2][["date", "player_name", "H", "HR"]])
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Active: Combo Meals (HR + SB)**")
+        combo_active = active_df[(active_df["HR"] >= 1) & (active_df["SB"] >= 1)][["date", "player_name", "HR", "SB"]]
+        if not combo_active.empty:
+            st.dataframe(combo_active.head(100), use_container_width=True)
+        else:
+            st.info("No combo meals on active roster.")
 
-            st.subheader("🧱 Quality Starts (QS)")
-            st.dataframe(team_df[team_df.get("QS", 0) >= 1][["date", "player_name", "IP", "ER", "QS"]])
+    with col2:
+        st.markdown("**Bench: Combo Meals (HR + SB)**")
+        combo_bench = bench_df[(bench_df["HR"] >= 1) & (bench_df["SB"] >= 1)][["date", "player_name", "HR", "SB"]]
+        if not combo_bench.empty:
+            st.dataframe(combo_bench.head(100), use_container_width=True)
+        else:
+            st.info("No combo meals on bench.")
 
-            st.subheader("🧯 Saves + Holds (SVH)")
-            st.dataframe(team_df[team_df.get("SVH", 0) >= 1][["date", "player_name", "PC", "SVH"]])
+    # =======================
+    # Core stat comparisons
+    # =======================
 
-            st.subheader("🔥 Double-Digit Strikeouts (K ≥ 10)")
-            st.dataframe(team_df[team_df["SO"] >= 10][["date", "player_name", "K", "IP"]])
+    paired_stat("Golden Sombreros (4+ SO)",
+        active_filter=(active_df["SO"] >= 4),
+        bench_filter=(bench_df["SO"] >= 4),
+        active_cols=["SO", "AB"]
+    )
 
-            st.subheader("🌊 5+ ER Allowed")
-            st.dataframe(team_df[team_df["ER"] >= 5][["date", "player_name", "ER", "IP"]])
+    paired_stat("Multi-HR Games (2+ HR)",
+        active_filter=(active_df["HR"] >= 2),
+        bench_filter=(bench_df["HR"] >= 2),
+        active_cols=["H", "HR"]
+    )
 
-            st.subheader("🌀 4+ Strikeouts")
-            st.dataframe(team_df[team_df["SO"] >= 4][["date", "player_name", "SO", "AB"]])
+    paired_stat("Grand Slams (SLAM)",
+        active_filter=(active_df["SLAM"] >= 1),
+        bench_filter=(bench_df["SLAM"] >= 1),
+        active_cols=["SLAM"]
+    )
 
-            st.subheader("🚀 Grand Slams (SLAM)")
-            st.dataframe(team_df[team_df.get("SLAM", 0) >= 1][["date", "player_name", "SLAM"]])
+    paired_stat("4+ Strikeouts",
+        active_filter=(active_df["SO"] >= 4),
+        bench_filter=(bench_df["SO"] >= 4),
+        active_cols=["SO", "AB"]
+    )
+
+    paired_stat("Double-Digit Ks (K ≥ 10)",
+        active_filter=(active_df["SO"] >= 10),
+        bench_filter=(bench_df["SO"] >= 10),
+        active_cols=["K", "IP"]
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Active: 5+ ER Allowed**")
+        try:
+            er_active = active_df[(active_df["ER"] >= 5)][["date", "player_name", "ER", "IP"]].dropna()
+            st.dataframe(er_active.head(100), use_container_width=True)
+        except Exception as e:
+            st.error(f"Active ER error: {e}")
+
+    with col2:
+        st.markdown("**Bench: 5+ ER Allowed**")
+        try:
+            er_bench = bench_df[(bench_df["ER"] >= 5)][["date", "player_name", "ER", "IP"]].dropna()
+            st.dataframe(er_bench.head(100), use_container_width=True)
+        except Exception as e:
+            st.error(f"Bench ER error: {e}")
+
+    # === Optional Bench Summary (if you still want it) ===
+    st.markdown("🧾 **Bench Summary**")
+    summary = {
+        "HR_SB": ((bench_df["HR"] >= 1) & (bench_df["SB"] >= 1)).sum(),
+        "HR2": (bench_df["HR"] >= 2).sum(),
+        "QS": bench_df["QS"].fillna(0).astype(int).sum(),
+        "SVH": bench_df["SVH"].fillna(0).astype(int).sum(),
+        "SLAM": bench_df["SLAM"].fillna(0).astype(int).sum(),
+        "ER5": (bench_df["ER"] >= 5).sum(),
+        "SO4": (bench_df["SO"] >= 4).sum(),
+    }
+    st.markdown(
+        f"""
+    • `{summary['HR_SB']}` HR+SB combos  
+    • `{summary['HR2']}` multi-HR games  
+    • `{summary['QS']}` Quality Starts  
+    • `{summary['SVH']}` Saves+Holds  
+    • `{summary['SLAM']}` Grand Slams  
+    • `{summary['ER5']}` 5+ ER outings  
+    • `{summary['SO4']}` 4+ strikeout games  
+    """)
 
 # === PLAYER STATS TAB ===
 with main_tab4:
@@ -380,239 +556,106 @@ with main_tab4:
         st.subheader("🟥 Pitching Stats (By Player)")
         st.dataframe(pitching_summary, use_container_width=True)
 
-    st.header("📈 Top Hitters by Z-Score Over Selected Date Range")
+    # === Utility: Z-Score Leaderboard Generator ===
+    def zscore_leaderboard(df, role, is_bench=False):
+        df = df.copy()
+        df = filter_by_date(df)
 
-    # Load and filter active non-bench hitters
-    hitters_df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-    hitters_df = hitters_df[(hitters_df["roster_slot"] != "BN") & (hitters_df["AB"] > 0)].copy()
-    hitters_df = filter_by_date(hitters_df)
+        if role == "hitter":
+            df = df[(df["AB"] > 0)]
+            raw_stats = ["R", "H", "HR", "RBI", "SB", "BB", "HBP", "AB", "PA", "TB"]
+            rate_stats = ["AVG", "OPS"]
+            zscore_stats = ["R", "HR", "RBI", "SB", "AVG", "OPS"]
 
-    # Choose which batting stats to include in Z-score
-    zscore_stats = ["R", "HR", "RBI", "SB", "AVG", "OPS"]
+            # Rate stats
+            df["AVG"] = df.apply(lambda r: r["H"] / r["AB"] if r["AB"] > 0 else 0, axis=1)
+            df["OBP"] = df.apply(lambda r: (r["H"] + r["BB"] + r["HBP"]) / r["PA"] if r["PA"] > 0 else 0, axis=1)
+            df["SLG"] = df.apply(lambda r: r["TB"] / r["AB"] if r["AB"] > 0 else 0, axis=1)
+            df["OPS"] = df["OBP"] + df["SLG"]
 
-    # Recalculate rate stats
-    hitters_df["AVG"] = hitters_df.apply(lambda r: r["H"] / r["AB"] if r["AB"] > 0 else 0, axis=1)
-    hitters_df["OBP"] = hitters_df.apply(lambda r: (r["H"] + r["BB"] + r["HBP"]) / r["PA"] if r["PA"] > 0 else 0, axis=1)
-    hitters_df["SLG"] = hitters_df.apply(lambda r: r["TB"] / r["AB"] if r["AB"] > 0 else 0, axis=1)
-    hitters_df["OPS"] = hitters_df["OBP"] + hitters_df["SLG"]
+            grouped = df.groupby("player_name")[raw_stats].sum(min_count=1).reset_index()
+            grouped["AVG"] = grouped["H"] / grouped["AB"]
+            grouped["OBP"] = (grouped["H"] + grouped["BB"] + grouped["HBP"]) / grouped["PA"]
+            grouped["SLG"] = grouped["TB"] / grouped["AB"]
+            grouped["OPS"] = grouped["OBP"] + grouped["SLG"]
 
-    raw_stats = ["R", "H", "HR", "RBI", "SB", "BB", "HBP", "AB", "PA", "TB"]
-    grouped = hitters_df.groupby("player_name")[raw_stats].sum(min_count=1).reset_index()
+            # Z-score
+            z = grouped[zscore_stats].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
+            weight = np.sqrt(grouped["AB"]) / np.sqrt(grouped["AB"].max())
+            z["AVG"] *= weight
+            z["OPS"] *= weight
 
-    # Recalculate rate stats again after summing
-    grouped["AVG"] = grouped["H"] / grouped["AB"]
-    grouped["OBP"] = (grouped["H"] + grouped["BB"] + grouped["HBP"]) / grouped["PA"]
-    grouped["SLG"] = grouped["TB"] / grouped["AB"]
-    grouped["OPS"] = grouped["OBP"] + grouped["SLG"]
+        else:  # pitcher
+            df = df[(df["PC"] > 0)]
+            raw_stats = ["IP", "K", "HA", "BBA", "ER", "QS", "SVH", "TBF"]
+            zscore_stats = ["K", "ERA", "WHIP", "K%-BB%", "QS", "SVH"]
 
-    # Compute z-scores
-    z_scores = grouped[zscore_stats].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
+            df["ERA"] = df.apply(lambda r: r["ER"] / r["IP"] * 9 if r["IP"] > 0 else 0, axis=1)
+            df["WHIP"] = df.apply(lambda r: (r["HA"] + r["BBA"]) / r["IP"] if r["IP"] > 0 else 0, axis=1)
+            df["K%"] = df.apply(lambda r: r["K"] / r["TBF"] if r["TBF"] > 0 else 0, axis=1)
+            df["BB%"] = df.apply(lambda r: r["BBA"] / r["TBF"] if r["TBF"] > 0 else 0, axis=1)
+            df["K%-BB%"] = df["K%"] - df["BB%"]
 
-    # Weight AVG and OPS z-scores by sqrt(AB) to downweight small samples
-    weight = np.sqrt(grouped["AB"]) / np.sqrt(grouped["AB"].max())  # scale from 0 to 1
-    z_scores["AVG"] *= weight
-    z_scores["OPS"] *= weight
+            grouped = df.groupby("player_name")[raw_stats].sum(min_count=1).reset_index()
+            grouped["ERA"] = grouped["ER"] / grouped["IP"] * 9
+            grouped["WHIP"] = (grouped["HA"] + grouped["BBA"]) / grouped["IP"]
+            grouped["K%"] = grouped["K"] / grouped["TBF"]
+            grouped["BB%"] = grouped["BBA"] / grouped["TBF"]
+            grouped["K%-BB%"] = grouped["K%"] - grouped["BB%"]
 
-    # Combine all z-scores
-    grouped["Z-Score Sum"] = z_scores.sum(axis=1)
+            z = grouped[zscore_stats].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
+            z["ERA"] *= -1
+            z["WHIP"] *= -1
 
-    # Get most recent team assignment for each player
-    latest_team = (
-        hitters_df.sort_values("date")
-        .groupby("player_name")["team_name"]
-        .last()
-        .reset_index()
-        .rename(columns={"team_name": "Current Team"})
-    )
+            weight = np.sqrt(grouped["TBF"]) / np.sqrt(grouped["TBF"].max())
+            for stat in ["ERA", "WHIP", "K%-BB%"]:
+                z[stat] *= weight
 
-    # Merge with grouped Z-score table
-    top20 = (
-        grouped[["player_name", "Z-Score Sum"] + zscore_stats]
-        .merge(latest_team, on="player_name", how="left")
-        .sort_values(by="Z-Score Sum", ascending=False)
-        .head(20)
-    )
+        grouped["Z-Score Sum"] = z.sum(axis=1)
 
-    st.dataframe(top20.reset_index(drop=True), use_container_width=True)
+        # Latest team info
+        latest_team = (
+            df.sort_values("date")
+            .groupby("player_name")["team_name"]
+            .last()
+            .reset_index()
+            .rename(columns={"team_name": "Current Team"})
+        )
 
-    st.header("📉 Top Bench Hitters by Z-Score Over Selected Date Range")
+        result = (
+            grouped[["player_name", "Z-Score Sum"] + zscore_stats]
+            .merge(latest_team, on="player_name", how="left")
+            .sort_values(by="Z-Score Sum", ascending=False)
+            .head(20)
+            .reset_index(drop=True)
+        )
 
-    # Load and filter bench hitters
-    bench_df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-    bench_df = bench_df[(bench_df["roster_slot"] == "BN") & (bench_df["AB"] > 0)].copy()
-    bench_df = filter_by_date(bench_df)
+        return result
 
-    # Stats to use for Z-score ranking
-    zscore_stats = ["R", "HR", "RBI", "SB", "AVG", "OPS"]
-    raw_stats = ["R", "H", "HR", "RBI", "SB", "BB", "HBP", "AB", "PA", "TB"]
+    # === Tabbed Layout for Z-Score Tables ===
+    tabs = st.tabs([
+        "📈 Top Hitters",
+        "📉 Bench Hitters",
+        "💪 Top Pitchers",
+        "🛋️ Bench Pitchers"
+    ])
 
-    # Recalculate rate stats
-    bench_df["AVG"] = bench_df.apply(lambda r: r["H"] / r["AB"] if r["AB"] > 0 else 0, axis=1)
-    bench_df["OBP"] = bench_df.apply(lambda r: (r["H"] + r["BB"] + r["HBP"]) / r["PA"] if r["PA"] > 0 else 0, axis=1)
-    bench_df["SLG"] = bench_df.apply(lambda r: r["TB"] / r["AB"] if r["AB"] > 0 else 0, axis=1)
-    bench_df["OPS"] = bench_df["OBP"] + bench_df["SLG"]
+    with tabs[0]:
+        df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
+        df = df[df["roster_slot"] != "BN"]
+        st.dataframe(zscore_leaderboard(df, role="hitter"), use_container_width=True)
 
-    # Aggregate per player
-    grouped = bench_df.groupby("player_name")[raw_stats].sum(min_count=1).reset_index()
-    grouped["AVG"] = grouped["H"] / grouped["AB"]
-    grouped["OBP"] = (grouped["H"] + grouped["BB"] + grouped["HBP"]) / grouped["PA"]
-    grouped["SLG"] = grouped["TB"] / grouped["AB"]
-    grouped["OPS"] = grouped["OBP"] + grouped["SLG"]
+    with tabs[1]:
+        df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
+        df = df[df["roster_slot"] == "BN"]
+        st.dataframe(zscore_leaderboard(df, role="hitter", is_bench=True), use_container_width=True)
 
-    # Compute z-scores
-    z_scores = grouped[zscore_stats].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
+    with tabs[2]:
+        df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
+        df = df[df["roster_slot"] != "BN"]
+        st.dataframe(zscore_leaderboard(df, role="pitcher"), use_container_width=True)
 
-    # Weight AVG and OPS z-scores by sqrt(AB) to downweight small samples
-    weight = np.sqrt(grouped["AB"]) / np.sqrt(grouped["AB"].max())  # scale from 0 to 1
-    z_scores["AVG"] *= weight
-    z_scores["OPS"] *= weight
-
-    # Combine all z-scores
-    grouped["Z-Score Sum"] = z_scores.sum(axis=1)
-
-    # Get latest team for each player
-    latest_team = (
-        bench_df.sort_values("date")
-        .groupby("player_name")["team_name"]
-        .last()
-        .reset_index()
-        .rename(columns={"team_name": "Current Team"})
-    )
-
-    # Merge and display
-    top20 = (
-        grouped[["player_name", "Z-Score Sum"] + zscore_stats]
-        .merge(latest_team, on="player_name", how="left")
-        .sort_values(by="Z-Score Sum", ascending=False)
-        .head(20)
-    )
-
-    st.dataframe(top20.reset_index(drop=True), use_container_width=True)
-
-    st.header("📈 Top Pitchers by Z-Score Over Selected Date Range")
-
-    # Load and filter active non-bench hitters
-    pitchers_df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-    pitchers_df = pitchers_df[(pitchers_df["roster_slot"] != "BN") & (pitchers_df["PC"] > 0)].copy()
-    pitchers_df = filter_by_date(pitchers_df)
-
-    # Choose which batting stats to include in Z-score
-    zscore_stats = ["K", "ERA", "WHIP", "K%-BB%", "QS", "SVH"]
-
-    # Recalculate rate stats
-    pitchers_df["ERA"] = pitchers_df.apply(lambda r: r["ER"] / r["IP"] * 9 if r["IP"] > 0 else 0, axis=1)
-    pitchers_df["WHIP"] = pitchers_df.apply(lambda r: (r["HA"] + r["BBA"]) / r["IP"] if r["IP"] > 0 else 0, axis=1)
-    pitchers_df["K%"] = pitchers_df.apply(lambda r: r["K"] / r["TBF"] if r["TBF"] > 0 else 0, axis=1)
-    pitchers_df["BB%"] = pitchers_df.apply(lambda r: r["BBA"] / r["TBF"] if r["TBF"] > 0 else 0, axis=1)
-    pitchers_df["K%-BB%"] = pitchers_df.apply(lambda r: r["K%"] - r["BB%"] if r["TBF"] > 0 else 0, axis=1)
-
-    raw_stats = ["IP", "K", "HA", "BBA", "ER", "QS", "SVH", "TBF"]
-    grouped = pitchers_df.groupby("player_name")[raw_stats].sum(min_count=1).reset_index()
-
-    # Recalculate rate stats again after summing
-    grouped["ERA"] = grouped["ER"] / grouped["IP"] *9
-    grouped["WHIP"] = (grouped["HA"] + grouped["BBA"]) / grouped["IP"]
-    grouped["K%"] = grouped["K"] / grouped["TBF"]
-    grouped["BB%"] = grouped["BBA"] / grouped["TBF"]
-    grouped["K%-BB%"] = grouped["K%"] - grouped["BB%"]
-
-    # Compute z-scores
-    z_scores = grouped[zscore_stats].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
-
-    # Adjust ERA and WHIP
-    z_scores["ERA"] *= -1
-    z_scores["WHIP"] *= -1
-
-    # Weighting factor
-    grouped["weight"] = np.sqrt(grouped["TBF"]) / np.sqrt(grouped["TBF"].max())
-
-    # Apply weight to selected z-score columns
-    for stat in ["ERA", "WHIP", "K%-BB%"]:
-        if stat in z_scores.columns:
-            z_scores[stat] *= grouped["weight"]
-
-    # Combine all z-scores
-    grouped["Z-Score Sum"] = z_scores.sum(axis=1)
-
-    # Get most recent team assignment for each player
-    latest_team = (
-        pitchers_df.sort_values("date")
-        .groupby("player_name")["team_name"]
-        .last()
-        .reset_index()
-        .rename(columns={"team_name": "Current Team"})
-    )
-
-    # Merge with grouped Z-score table
-    top20 = (
-        grouped[["player_name", "Z-Score Sum"] + zscore_stats]
-        .merge(latest_team, on="player_name", how="left")
-        .sort_values(by="Z-Score Sum", ascending=False)
-        .head(20)
-    )
-
-    st.dataframe(top20.reset_index(drop=True), use_container_width=True)
-
-    st.header("📉 Top Bench Pitchers by Z-Score Over Selected Date Range")
-
-    # Load and filter active non-bench hitters
-    bench_df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-    bench_df = bench_df[(bench_df["roster_slot"] == "BN") & (bench_df["PC"] > 0)].copy()
-    bench_df = filter_by_date(bench_df)
-
-    # Choose which batting stats to include in Z-score
-    zscore_stats = ["K", "ERA", "WHIP", "K%-BB%", "QS", "SVH"]
-
-    # Recalculate rate stats
-    bench_df["ERA"] = bench_df.apply(lambda r: r["ER"] / r["IP"] * 9 if r["IP"] > 0 else 0, axis=1)
-    bench_df["WHIP"] = bench_df.apply(lambda r: (r["HA"] + r["BBA"]) / r["IP"] if r["IP"] > 0 else 0, axis=1)
-    bench_df["K%"] = bench_df.apply(lambda r: r["K"] / r["TBF"] if r["TBF"] > 0 else 0, axis=1)
-    bench_df["BB%"] = bench_df.apply(lambda r: r["BBA"] / r["TBF"] if r["TBF"] > 0 else 0, axis=1)
-    bench_df["K%-BB%"] = bench_df.apply(lambda r: r["K%"] - r["BB%"] if r["TBF"] > 0 else 0, axis=1)
-
-    raw_stats = ["IP", "K", "HA", "BBA", "ER", "QS", "SVH", "TBF"]
-    grouped = bench_df.groupby("player_name")[raw_stats].sum(min_count=1).reset_index()
-
-    # Recalculate rate stats again after summing
-    grouped["ERA"] = grouped["ER"] / grouped["IP"] *9
-    grouped["WHIP"] = (grouped["HA"] + grouped["BBA"]) / grouped["IP"]
-    grouped["K%"] = grouped["K"] / grouped["TBF"]
-    grouped["BB%"] = grouped["BBA"] / grouped["TBF"]
-    grouped["K%-BB%"] = grouped["K%"] - grouped["BB%"]
-
-    # Compute z-scores
-    z_scores = grouped[zscore_stats].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
-
-    # Adjust ERA and WHIP
-    z_scores["ERA"] *= -1
-    z_scores["WHIP"] *= -1
-
-    # Weighting factor
-    grouped["weight"] = np.sqrt(grouped["TBF"]) / np.sqrt(grouped["TBF"].max())
-
-    # Apply weight to selected z-score columns
-    for stat in ["ERA", "WHIP", "K%-BB%"]:
-        if stat in z_scores.columns:
-            z_scores[stat] *= grouped["weight"]
-
-    # Combine all z-scores
-    grouped["Z-Score Sum"] = z_scores.sum(axis=1)
-
-    # Get most recent team assignment for each player
-    latest_team = (
-        bench_df.sort_values("date")
-        .groupby("player_name")["team_name"]
-        .last()
-        .reset_index()
-        .rename(columns={"team_name": "Current Team"})
-    )
-
-    # Merge with grouped Z-score table
-    top20 = (
-        grouped[["player_name", "Z-Score Sum"] + zscore_stats]
-        .merge(latest_team, on="player_name", how="left")
-        .sort_values(by="Z-Score Sum", ascending=False)
-        .head(20)
-    )
-
-    st.dataframe(top20.reset_index(drop=True), use_container_width=True)
+    with tabs[3]:
+        df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
+        df = df[df["roster_slot"] == "BN"]
+        st.dataframe(zscore_leaderboard(df, role="pitcher", is_bench=True), use_container_width=True)
