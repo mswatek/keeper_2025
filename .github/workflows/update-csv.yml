@@ -2,8 +2,8 @@ name: Daily CSV Update
 
 on:
   schedule:
-    - cron: '30 23 * * *'  # Runs daily at 4:30 PDT
-  workflow_dispatch:     # Allows manual trigger
+    - cron: '52 23 * * *'  # Runs daily at 4:52 PDT (11:30 PM UTC)
+  workflow_dispatch:       # Allows manual trigger
 
 jobs:
   update-csv:
@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.11'  # 🔧 updated version
 
       - name: Install dependencies
         run: pip install -r requirements.txt
