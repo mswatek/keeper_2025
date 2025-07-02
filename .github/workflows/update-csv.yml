@@ -2,7 +2,7 @@ name: Daily CSV Update
 
 on:
   schedule:
-    - cron: '0 8 * * *'  # Runs daily at 5:30 PDT (11:30 PM UTC)
+    - cron: '0 8 * * *'  # Runs daily at 1:00 PDT
   workflow_dispatch:       # Allows manual trigger
 
 jobs:
