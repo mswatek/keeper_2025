@@ -5,5 +5,4 @@ plotly.express
 requests
 requests_oauthlib
 requests.auth
-random
 os
