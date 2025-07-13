@@ -20,7 +20,7 @@ def get_latest_csv_date(csv_file):
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
     return df['date'].max().date()
 
-#csv_cutoff_date = datetime(2025, 5, 30).date() #use this when I don't want to go all the way to current day
+#csv_cutoff_date = datetime(2025, 4, 10).date() #use this when I don't want to go all the way to current day
 csv_cutoff_date = datetime.today().date() - timedelta(days=1)
 latest_in_csv = get_latest_csv_date(csv_path)
 
@@ -48,16 +48,16 @@ def update_team_names(existing_csv_path, latest_data):
 
     # Create a lookup dictionary: latest team_name per team_key
     latest_lookup = (
-        latest_data.sort_values("date")
-        .groupby("team_key")
-        .tail(1)[["team_key", "team_name"]]
-        .drop_duplicates(subset="team_key", keep="last")
-        .set_index("team_key")["team_name"]
+        latest_data.sort_values("Date")
+        .groupby("Team_Key")
+        .tail(1)[["Team_Key", "Team"]]
+        .drop_duplicates(subset="Team_Key", keep="last")
+        .set_index("Team_Key")["Team"]
         .to_dict()
     )
 
     # Update team_name using the mapping, keeping unmatched names as-is
-    df_existing["team_name"] = df_existing["team_key"].map(latest_lookup).fillna(df_existing["team_name"])
+    df_existing["Team"] = df_existing["Team_Key"].map(latest_lookup).fillna(df_existing["Team"])
 
     # Overwrite the original CSV
     df_existing.to_csv(existing_csv_path, index=False)
@@ -364,6 +364,18 @@ player_wide = player_df.pivot_table(
     aggfunc="sum"
 ).reset_index()
 
+## Create Outs
+def ip_to_outs(ip):
+    try:
+        ip = float(ip)
+        full_innings = int(ip)
+        partial = round((ip - full_innings) * 10)  # Converts .1 → 1 out, .2 → 2 outs
+        return full_innings * 3 + partial
+    except:
+        return None
+
+player_wide["OUT"] = player_wide["IP"].apply(ip_to_outs)
+
 # Update IP
 
 # Assume the 'Innings Pitched' column contains strings or floats like: 5.1, 6.2, etc.
@@ -381,6 +393,13 @@ def convert_ip(ip):
     
 player_wide["IP"] = player_wide["IP"].apply(convert_ip)
 
+player_wide.rename(columns={
+    "date": "Date",
+    "team_name": "Team",
+    "team_key": "Team_Key",
+    "player_name": "Player",
+}, inplace=True)
+
 # Save it
 #player_wide.to_csv("daily_player_stats_wide.csv", index=False) #when running for first time
 append_to_csv(player_wide, 'daily_player_stats_wide.csv')
@@ -392,10 +411,10 @@ print("✅ Saved player-wide stats: daily_player_stats_wide.csv")
 active_wide = player_wide[player_wide["roster_slot"] != "BN"].copy()
 
 # 🪣 Step 1: Group and sum at the team-day level
-group_cols = ["date", "team_name", "team_key"]
+group_cols = ["Date", "Team", "Team_Key"]
 value_cols = [
     col for col in active_wide.columns 
-    if col not in group_cols + ["player_name", "player_id", "roster_slot"]
+    if col not in group_cols + ["Player", "player_id", "roster_slot"]
 ]
 
 summed_stats = (
@@ -418,8 +437,7 @@ if has_cols(summed_stats, ["H", "AB"]):
 
 if has_cols(summed_stats, ["H", "BB", "HBP", "PA"]):
     summed_stats["OBP"] = summed_stats.apply(
-        lambda row: safe_div(row["H"] + row["BB"] + row["HBP"], row["PA"]), axis=1
-    )
+        lambda row: safe_div(row["H"] + row["BB"] + row["HBP"], row["PA"]), axis=1)
 
 if has_cols(summed_stats, ["TB", "AB"]):
     summed_stats["SLG"] = summed_stats.apply(lambda row: safe_div(row["TB"], row["AB"]), axis=1)
@@ -430,14 +448,14 @@ if has_cols(summed_stats, ["OBP", "SLG"]):
 if has_cols(summed_stats, ["K", "BBA"]):
     summed_stats["KBB"] = summed_stats.apply(lambda row: safe_div(row["K"], row["BBA"]), axis=1)
 
-if has_cols(summed_stats, ["ER", "IP"]):
-    summed_stats["ERA"] = summed_stats.apply(lambda row: safe_div(row["ER"] * 9, row["IP"]), axis=1)
+if has_cols(summed_stats, ["ER", "OUT"]):
+    summed_stats["ERA"] = summed_stats.apply(lambda row: safe_div(row["ER"] * 9, row["OUT"] / 3), axis=1)
 
-if has_cols(summed_stats, ["BBA", "HA", "IP"]):
-    summed_stats["WHIP"] = summed_stats.apply(lambda row: safe_div(row["BBA"] + row["HA"], row["IP"]), axis=1)
+if has_cols(summed_stats, ["BBA", "HA", "OUT"]):
+    summed_stats["WHIP"] = summed_stats.apply(lambda row: safe_div(row["BBA"] + row["HA"], row["OUT"] / 3), axis=1)
 
 # 🧭 Reorder columns for presentation
-desired_order = ["date", "team_name", "team_key", "R", "HR", "RBI", "SB", "AVG", "OPS", "K", "ERA", "WHIP", "KBB", "QS", "SVH"]
+desired_order = ["Date", "Team", "Team_Key", "R", "HR", "RBI", "SB", "AVG", "OPS", "K", "ERA", "WHIP", "KBB", "QS", "SVH"]
 all_columns = list(summed_stats.columns)
 unordered_cols = [col for col in all_columns if col not in desired_order]
 final_cols = [col for col in desired_order if col in all_columns] + unordered_cols
