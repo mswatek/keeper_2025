@@ -14,8 +14,8 @@ main_tab1, main_tab2, main_tab3, main_tab4 = st.tabs(["🏆 League Summary", "�
 with main_tab2:
 
     # Load team-level data
-    df = pd.read_csv("daily_team_combined_stats.csv", parse_dates=["date"], usecols=lambda col: col != "team_key")
-    min_date, max_date = df["date"].min(), df["date"].max()
+    df = pd.read_csv("daily_team_combined_stats.csv", parse_dates=["Date"], usecols=lambda col: col != "Team_Key")
+    min_date, max_date = df["Date"].min(), df["Date"].max()
 
     # Stat categories
     roto_cats = {
@@ -25,7 +25,7 @@ with main_tab2:
     }
     hitting_stats = ['R', 'HR', 'RBI', 'SB', 'AVG', 'OPS']
     pitching_stats = ['K', 'ERA', 'WHIP', 'KBB', 'QS', 'SVH']
-    raw_stats = ['H', 'AB', 'BB', 'HBP', 'PA', 'TB', 'K', 'BBA', 'ER', 'IP', 'HA']
+    raw_stats = ['H', 'AB', 'BB', 'HBP', 'PA', 'TB', 'K', 'BBA', 'ER', 'IP', 'OUT', 'HA']
     rate_stats = ['AVG', 'OPS', 'ERA', 'WHIP', 'KBB']
 
     # Date range selector
@@ -54,10 +54,10 @@ with main_tab2:
     )
 
     # Filter data
-    df_range = df[(df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))].copy()
-    numeric_cols = [col for col in df_range.columns if col not in ["date", "team_name"]]
-    cumulative = df_range.groupby(["team_name", "date"])[numeric_cols].sum().reset_index()
-    cumulative[numeric_cols] = cumulative.groupby("team_name")[numeric_cols].cumsum()
+    df_range = df[(df["Date"] >= pd.to_datetime(start_date)) & (df["Date"] <= pd.to_datetime(end_date))].copy()
+    numeric_cols = [col for col in df_range.columns if col not in ["Date", "Team"]]
+    cumulative = df_range.groupby(["Team", "Date"])[numeric_cols].sum().reset_index()
+    cumulative[numeric_cols] = cumulative.groupby("Team")[numeric_cols].cumsum()
 
     # Safe division
     def safe_div(n, d): return n / d if d else None
@@ -67,18 +67,18 @@ with main_tab2:
     cumulative["OBP"] = cumulative.apply(lambda r: safe_div(r["H"] + r["BB"] + r["HBP"], r["PA"]), axis=1)
     cumulative["SLG"] = cumulative.apply(lambda r: safe_div(r["TB"], r["AB"]), axis=1)
     cumulative["OPS"] = cumulative["OBP"] + cumulative["SLG"]
-    cumulative["ERA"] = cumulative.apply(lambda r: safe_div(r["ER"] * 9, r["IP"]), axis=1)
-    cumulative["WHIP"] = cumulative.apply(lambda r: safe_div(r["BBA"] + r["HA"], r["IP"]), axis=1)
+    cumulative["ERA"] = cumulative.apply(lambda r: safe_div(r["ER"] * 9, r["OUT"]/3), axis=1)
+    cumulative["WHIP"] = cumulative.apply(lambda r: safe_div(r["BBA"] + r["HA"], r["OUT"]/3), axis=1)
     cumulative["KBB"] = cumulative.apply(lambda r: safe_div(r["K"], r["BBA"]), axis=1)
 
     # Roto ranking
-    num_teams = cumulative["team_name"].nunique()
+    num_teams = cumulative["Team"].nunique()
     roto_ranks = pd.DataFrame(index=cumulative.index)
     for stat in selected_stats:
         if stat in cumulative.columns:
             asc = not roto_cats[stat]
             colname = f"roto_{stat}"
-            roto_ranks[colname] = cumulative.groupby("date")[stat].rank(ascending=asc, method="average")
+            roto_ranks[colname] = cumulative.groupby("Date")[stat].rank(ascending=asc, method="average")
             roto_ranks[colname] = num_teams + 1 - roto_ranks[colname]
 
     cumulative = pd.concat([cumulative, roto_ranks], axis=1)
@@ -89,11 +89,11 @@ with main_tab2:
     st.markdown("Use the Date Range filter to calculate points for custom time periods.")
     fig = px.line(
         cumulative,
-        x=np.array(cumulative["date"]),
+        x=np.array(cumulative["Date"]),
         y="Roto_Points",
-        color="team_name",
+        color="Team",
         title=f"{roto_mode} Roto Points from {start_date} to {end_date}",
-        labels={"team_name": "Team", "Roto_Points": "Roto Points"}
+        labels={"Team": "Team", "Roto_Points": "Roto Points"}
     )
     fig.update_layout(xaxis_title=None)
     st.plotly_chart(fig, use_container_width=True)
@@ -105,11 +105,11 @@ with main_tab2:
     if stat_choice in cumulative.columns:
         fig2 = px.line(
             cumulative,
-            x=np.array(cumulative["date"]),
+            x=np.array(cumulative["Date"]),
             y=stat_choice,
-            color="team_name",
+            color="Team",
             title=f"Cumulative {stat_choice} from {start_date} to {end_date}",
-            labels={"team_name": "Team", stat_choice: f"{stat_choice} Total"}
+            labels={"Team": "Team", stat_choice: f"{stat_choice} Total"}
         )
         fig2.update_layout(xaxis_title=None)
         st.plotly_chart(fig2, use_container_width=True)
@@ -121,16 +121,16 @@ with main_tab1:
     st.header("🏆 Overall Standings")
     st.markdown("This table shows the current standings and will keep track of 2nd half improvements. (Note: I made June 1st the cuttoff for the first half until we get past the All-Star Break)")
 
-    june_first = pd.to_datetime("2025-06-01")
-    latest_date = df["date"].max()
+    june_first = pd.to_datetime("2025-04-01")
+    latest_date = df["Date"].max()
 
     def compute_cumulative_roto(data, stats_subset):
         data = data.copy()
 
         # Cumulative build
-        numeric_cols = [col for col in data.columns if col not in ["date", "team_name"]]
-        cumulative = data.groupby(["team_name", "date"])[numeric_cols].sum().reset_index()
-        cumulative[numeric_cols] = cumulative.groupby("team_name")[numeric_cols].cumsum()
+        numeric_cols = [col for col in data.columns if col not in ["Date", "Team"]]
+        cumulative = data.groupby(["Team", "Date"])[numeric_cols].sum().reset_index()
+        cumulative[numeric_cols] = cumulative.groupby("Team")[numeric_cols].cumsum()
 
         # Rate stats
         def safe_div(n, d): return n / d if d else None
@@ -145,15 +145,15 @@ with main_tab1:
             cumulative["OPS"] = cumulative["OBP"] + cumulative["SLG"]
         if {"K", "BBA"}.issubset(cumulative.columns):
             cumulative["KBB"] = cumulative.apply(lambda r: safe_div(r["K"], r["BBA"]), axis=1)
-        if {"ER", "IP"}.issubset(cumulative.columns):
-            cumulative["ERA"] = cumulative.apply(lambda r: safe_div(r["ER"] * 9, r["IP"]), axis=1)
-        if {"BBA", "HA", "IP"}.issubset(cumulative.columns):
-            cumulative["WHIP"] = cumulative.apply(lambda r: safe_div(r["BBA"] + r["HA"], r["IP"]), axis=1)
+        if {"ER", "OUT"}.issubset(cumulative.columns):
+            cumulative["ERA"] = cumulative.apply(lambda r: safe_div(r["ER"] * 9, r["OUT"]/3), axis=1)
+        if {"BBA", "HA", "OUT"}.issubset(cumulative.columns):
+            cumulative["WHIP"] = cumulative.apply(lambda r: safe_div(r["BBA"] + r["HA"], r["OUT"]/3), axis=1)
 
         # Final-day only
-        latest = cumulative[cumulative["date"] == cumulative["date"].max()]
+        latest = cumulative[cumulative["Date"] == cumulative["Date"].max()]
 
-        num_teams = latest["team_name"].nunique()
+        num_teams = latest["Team"].nunique()
         roto_cols = []
         for stat in stats_subset:
             if stat in latest.columns:
@@ -164,37 +164,37 @@ with main_tab1:
                 roto_cols.append(colname)
 
         latest["Roto Points"] = latest[roto_cols].sum(axis=1)
-        return latest[["team_name", "Roto Points"] + roto_cols]
+        return latest[["Team", "Roto Points"] + roto_cols]
 
     full_roto = compute_cumulative_roto(df, all_stats).rename(columns={"Roto Points": "Total Roto Points"})
     hitting_roto = compute_cumulative_roto(df, hitting_stats).rename(columns={"Roto Points": "Hitting Points"})
     pitching_roto = compute_cumulative_roto(df, pitching_stats).rename(columns={"Roto Points": "Pitching Points"})
 
     # Before June 1st (First Half)
-    before_june = df[df["date"] < june_first]
+    before_june = df[df["Date"] < june_first]
     before_roto = compute_cumulative_roto(before_june, all_stats).rename(
         columns={"Roto Points": "1st Half Points"}
     )
     
     # Since June 1st (Second Half)
-    since_june = df[df["date"] >= june_first]
+    since_june = df[df["Date"] >= june_first]
     june_roto = compute_cumulative_roto(since_june, all_stats).rename(columns={"Roto Points": "2nd Half Points"})
 
 
 
     # Merge all
-    summary = full_roto[["team_name", "Total Roto Points"]].merge(
-        hitting_roto[["team_name", "Hitting Points"]],
-        on="team_name"
+    summary = full_roto[["Team", "Total Roto Points"]].merge(
+        hitting_roto[["Team", "Hitting Points"]],
+        on="Team"
     ).merge(
-        pitching_roto[["team_name", "Pitching Points"]],
-        on="team_name"
+        pitching_roto[["Team", "Pitching Points"]],
+        on="Team"
     ).merge(
-        before_roto[["team_name", "1st Half Points"]],
-        on="team_name"
+        before_roto[["Team", "1st Half Points"]],
+        on="Team"
     ).merge(
-        june_roto[["team_name", "2nd Half Points"]],
-        on="team_name"
+        june_roto[["Team", "2nd Half Points"]],
+        on="Team"
     )
 
     # ➕ Add improvement column
@@ -232,11 +232,11 @@ with main_tab3:
     st.markdown("These tables summarize stats that are not part of our league's scoring.")
 
     def filter_by_date(df):
-        return df[(df["date"] >= start_date) & (df["date"] <= end_date)]
+        return df[(df["Date"] >= start_date) & (df["Date"] <= end_date)]
 
     # Load and filter wide-format player data
-    df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-    df["date"] = df["date"].dt.date
+    df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["Date"])
+    df["Date"] = df["Date"].dt.date
 
     active_df = df[df["roster_slot"] != "BN"].copy()
     active_df = filter_by_date(active_df)
@@ -245,9 +245,9 @@ with main_tab3:
     fielding_stats = ["PO", "A", "E"]
     pitching_stats = ["PC", "TBF", "RAPP", "1BA", "2BA", "3BA", "BSV", "PICK", "SBA", "BBA"]
 
-    hitting_summary = active_df.groupby("team_name")[hitting_stats].sum(min_count=1).reset_index()
-    fielding_summary = active_df.groupby("team_name")[fielding_stats].sum(min_count=1).reset_index()
-    pitching_summary = active_df.groupby("team_name")[pitching_stats].sum(min_count=1).reset_index()
+    hitting_summary = active_df.groupby("Team")[hitting_stats].sum(min_count=1).reset_index()
+    fielding_summary = active_df.groupby("Team")[fielding_stats].sum(min_count=1).reset_index()
+    pitching_summary = active_df.groupby("Team")[pitching_stats].sum(min_count=1).reset_index()
 
     stat_tab1, stat_tab2, stat_tab3 = st.tabs(["⚾ Hitting", "🧤 Fielding", "🔥 Pitching"])
     with stat_tab1:
@@ -262,33 +262,33 @@ with main_tab3:
 
     # === 🧮 Best & Worst Team Days (Raw Stats Ranked by Composite Z-Score) ===
 
-    player_df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-    player_df["date"] = player_df["date"].dt.date
+    player_df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["Date"])
+    player_df["Date"] = player_df["Date"].dt.date
 
     player_df = player_df[(player_df["roster_slot"] != "BN") & 
-                        (player_df["date"] >= start_date) & 
-                        (player_df["date"] <= end_date)].copy()
+                        (player_df["Date"] >= start_date) & 
+                        (player_df["Date"] <= end_date)].copy()
 
     # --- Recalculate rate stats at player level ---
     player_df["AVG"] = player_df.apply(lambda r: r["H"] / r["AB"] if r["AB"] > 0 else np.nan, axis=1)
     player_df["OBP"] = player_df.apply(lambda r: (r["H"] + r["BB"] + r["HBP"]) / r["PA"] if r["PA"] > 0 else np.nan, axis=1)
     player_df["SLG"] = player_df.apply(lambda r: r["TB"] / r["AB"] if r["AB"] > 0 else np.nan, axis=1)
     player_df["OPS"] = player_df["OBP"] + player_df["SLG"]
-    player_df["ERA"] = player_df.apply(lambda r: (r["ER"] * 9) / r["IP"] if r["IP"] > 0 else np.nan, axis=1)
-    player_df["WHIP"] = player_df.apply(lambda r: (r["BBA"] + r["HA"]) / r["IP"] if r["IP"] > 0 else np.nan, axis=1)
+    player_df["ERA"] = player_df.apply(lambda r: (r["ER"] * 9) / r["OUT"]/3 if r["OUT"] > 0 else np.nan, axis=1)
+    player_df["WHIP"] = player_df.apply(lambda r: (r["BBA"] + r["HA"]) / r["OUT"]/3 if r["OUT"] > 0 else np.nan, axis=1)
 
     # Estimate TBF if not provided
     if "TBF" not in player_df.columns:
-        player_df["TBF"] = player_df["IP"] * 3 + player_df["HA"] + player_df["BBA"]
+        player_df["TBF"] = player_df["OUT"] + player_df["HA"] + player_df["BBA"]
 
     # --- Aggregate to team-day level ---
     agg_dict = {
         "R": "sum", "HR": "sum", "RBI": "sum", "SB": "sum", "K": "sum",
         "QS": "sum", "SVH": "sum", "PA": "sum",
         "AVG": "mean", "OPS": "mean", "ERA": "mean", "WHIP": "mean",
-        "AB": "sum", "IP": "sum", "TBF": "sum", "BBA": "sum"
+        "AB": "sum", "IP": "sum", "OUT": "sum", "TBF": "sum", "BBA": "sum"
     }
-    team_day = player_df.groupby(["team_name", "date"]).agg(agg_dict).reset_index()
+    team_day = player_df.groupby(["Team", "Date"]).agg(agg_dict).reset_index()
 
     # Calculate K%-BB% from team totals
     team_day["K%-BB%"] = team_day.apply(
@@ -323,16 +323,16 @@ with main_tab3:
     team_day["z_total"] = z_scores.sum(axis=1)
 
     # Find best and worst days
-    best_days = team_day.loc[team_day.groupby("team_name")["z_total"].idxmax()].sort_values("z_total", ascending=False)
+    best_days = team_day.loc[team_day.groupby("Team")["z_total"].idxmax()].sort_values("z_total", ascending=False)
     
     # Apply PA threshold for worst day evaluation
-    team_day["PA"] = player_df.groupby(["team_name", "date"])["PA"].sum().reindex(team_day.set_index(["team_name", "date"]).index).values
+    team_day["PA"] = player_df.groupby(["Team", "Date"])["PA"].sum().reindex(team_day.set_index(["Team", "Date"]).index).values
     eligible_for_worst = team_day[team_day["PA"] >= 30].copy()
 
     # Now identify worst days only among those that meet the PA threshold
-    worst_days = eligible_for_worst.loc[eligible_for_worst.groupby("team_name")["z_total"].idxmin()].sort_values("z_total")
+    worst_days = eligible_for_worst.loc[eligible_for_worst.groupby("Team")["z_total"].idxmin()].sort_values("z_total")
 
-    display_cols = ["team_name", "date", "PA", "R", "HR", "RBI", "SB", "AVG", "OPS", "IP", "K", "ERA", "WHIP", "K%-BB%", "QS", "SVH"]
+    display_cols = ["Team", "Date", "PA", "R", "HR", "RBI", "SB", "AVG", "OPS", "IP", "K", "ERA", "WHIP", "K%-BB%", "QS", "SVH"]
 
     # --- Display raw stats, ranked by z_total ---
     st.header("💫 Best and Worst Team Days")
@@ -352,8 +352,8 @@ with main_tab3:
     st.markdown("View the good and bad performances that happened in your lineup and on your bench.")
 
     # Load & clean data
-    df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-    df["date"] = df["date"].dt.date
+    df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["Date"])
+    df["Date"] = df["Date"].dt.date
     
     df = filter_by_date(df)
 
@@ -362,11 +362,11 @@ with main_tab3:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    teams = sorted(df["team_name"].unique())
+    teams = sorted(df["Team"].unique())
     selected_team = st.selectbox("Select a team:", teams)
 
-    active_df = df[(df["team_name"] == selected_team) & (df["roster_slot"] != "BN")].copy()
-    bench_df = df[(df["team_name"] == selected_team) & (df["roster_slot"] == "BN")].copy()
+    active_df = df[(df["Team"] == selected_team) & (df["roster_slot"] != "BN")].copy()
+    bench_df = df[(df["Team"] == selected_team) & (df["roster_slot"] == "BN")].copy()
 
     # =======================
     # Helper function
@@ -379,8 +379,8 @@ with main_tab3:
             active_filtered = active_df.loc[active_filter].copy()
             bench_filtered = bench_df.loc[bench_filter].copy()
 
-            active_table = active_filtered[["date", "player_name"] + active_cols].dropna(subset=active_cols)
-            bench_table = bench_filtered[["date", "player_name"] + bench_cols].dropna(subset=bench_cols)
+            active_table = active_filtered[["Date", "Player"] + active_cols].dropna(subset=active_cols)
+            bench_table = bench_filtered[["Date", "Player"] + bench_cols].dropna(subset=bench_cols)
 
         except Exception as e:
             st.error(f"Error in '{title}': {e}")
@@ -408,14 +408,14 @@ with main_tab3:
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**Active: Near-Quality Starts (5.667 IP & ≤ 3 ER)**")
-        nqs = active_df[(active_df["IP"] == 5.667) & (active_df["ER"] <= 3)][["date", "player_name", "IP", "ER"]]
+        nqs = active_df[(active_df["IP"] == 5.667) & (active_df["ER"] <= 3)][["Date", "Player", "IP", "ER"]]
         if not nqs.empty:
             st.dataframe(nqs.head(100), use_container_width=True, hide_index=True)
         else:
             st.info("No near-quality starts on active roster.")
     with col2:
         st.markdown("**Bench: Quality Starts (QS ≥ 1)**")
-        qs_bench = bench_df[bench_df["QS"] >= 1][["date", "player_name", "IP", "ER", "QS"]]
+        qs_bench = bench_df[bench_df["QS"] >= 1][["Date", "Player", "IP", "ER", "QS"]]
         if not qs_bench.empty:
             st.dataframe(qs_bench.head(100), use_container_width=True, hide_index=True)
         else:
@@ -425,14 +425,14 @@ with main_tab3:
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**Active: Blown Saves (BSV ≥ 1)**")
-        bsv = active_df[active_df.get("BSV", 0) >= 1][["date", "player_name", "BSV"]]
+        bsv = active_df[active_df.get("BSV", 0) >= 1][["Date", "Player", "BSV"]]
         if not bsv.empty:
             st.dataframe(bsv.head(100), use_container_width=True, hide_index=True)
         else:
             st.info("No blown saves on active roster.")
     with col2:
         st.markdown("**Bench: Saves + Holds (SVH ≥ 1)**")
-        svh = bench_df[bench_df.get("SVH", 0) >= 1][["date", "player_name", "PC", "SVH"]]
+        svh = bench_df[bench_df.get("SVH", 0) >= 1][["Date", "Player", "PC", "SVH"]]
         if not svh.empty:
             st.dataframe(svh.head(100), use_container_width=True, hide_index=True)
         else:
@@ -441,7 +441,7 @@ with main_tab3:
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**Active: Combo Meals (HR + SB)**")
-        combo_active = active_df[(active_df["HR"] >= 1) & (active_df["SB"] >= 1)][["date", "player_name", "HR", "SB"]]
+        combo_active = active_df[(active_df["HR"] >= 1) & (active_df["SB"] >= 1)][["Date", "Player", "HR", "SB"]]
         if not combo_active.empty:
             st.dataframe(combo_active.head(100), use_container_width=True, hide_index=True)
         else:
@@ -449,7 +449,7 @@ with main_tab3:
 
     with col2:
         st.markdown("**Bench: Combo Meals (HR + SB)**")
-        combo_bench = bench_df[(bench_df["HR"] >= 1) & (bench_df["SB"] >= 1)][["date", "player_name", "HR", "SB"]]
+        combo_bench = bench_df[(bench_df["HR"] >= 1) & (bench_df["SB"] >= 1)][["Date", "Player", "HR", "SB"]]
         if not combo_bench.empty:
             st.dataframe(combo_bench.head(100), use_container_width=True, hide_index=True)
         else:
@@ -493,7 +493,7 @@ with main_tab3:
     with col1:
         st.markdown("**Active: 5+ ER Allowed**")
         try:
-            er_active = active_df[(active_df["ER"] >= 5)][["date", "player_name", "ER", "IP"]].dropna()
+            er_active = active_df[(active_df["ER"] >= 5)][["Date", "Player", "ER", "IP"]].dropna()
             st.dataframe(er_active.head(100), use_container_width=True, hide_index=True)
         except Exception as e:
             st.error(f"Active ER error: {e}")
@@ -501,7 +501,7 @@ with main_tab3:
     with col2:
         st.markdown("**Bench: 5+ ER Allowed**")
         try:
-            er_bench = bench_df[(bench_df["ER"] >= 5)][["date", "player_name", "ER", "IP"]].dropna()
+            er_bench = bench_df[(bench_df["ER"] >= 5)][["Date", "Player", "ER", "IP"]].dropna()
             st.dataframe(er_bench.head(100), use_container_width=True, hide_index=True)
         except Exception as e:
             st.error(f"Bench ER error: {e}")
@@ -513,11 +513,11 @@ with main_tab4:
     st.markdown("These tables show which players are leading in stats that aren't part of our league's scoring.")
 
     def filter_by_date(df):
-        return df[(df["date"] >= start_date) & (df["date"] <= end_date)]
+        return df[(df["Date"] >= start_date) & (df["Date"] <= end_date)]
 
     # Load and filter data
-    df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-    df["date"] = df["date"].dt.date
+    df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["Date"])
+    df["Date"] = df["Date"].dt.date
 
     active_df = df[df["roster_slot"] != "BN"].copy()
     active_df = filter_by_date(active_df)
@@ -535,9 +535,9 @@ with main_tab4:
     pitching_stats = ["PC", "TBF", "RAPP", "1BA", "2BA", "3BA", "BSV", "PICK", "SBA", "BBA"]
 
     # Summarize by player
-    hitting_summary = batters_df.groupby("player_name")[hitting_stats].sum(min_count=1).reset_index()
-    fielding_summary = batters_df.groupby("player_name")[fielding_stats].sum(min_count=1).reset_index()
-    pitching_summary = pitchers_df.groupby("player_name")[pitching_stats].sum(min_count=1).reset_index()
+    hitting_summary = batters_df.groupby("Player")[hitting_stats].sum(min_count=1).reset_index()
+    fielding_summary = batters_df.groupby("Player")[fielding_stats].sum(min_count=1).reset_index()
+    pitching_summary = pitchers_df.groupby("Player")[pitching_stats].sum(min_count=1).reset_index()
 
     # Display tabs
     stat_tab1, stat_tab2, stat_tab3 = st.tabs(["⚾ Hitting", "🧤 Fielding", "🔥 Pitching"])
@@ -570,7 +570,7 @@ with main_tab4:
             df["SLG"] = df.apply(lambda r: r["TB"] / r["AB"] if r["AB"] > 0 else 0, axis=1)
             df["OPS"] = df["OBP"] + df["SLG"]
 
-            grouped = df.groupby("player_name")[raw_stats].sum(min_count=1).reset_index()
+            grouped = df.groupby("Player")[raw_stats].sum(min_count=1).reset_index()
             grouped["AVG"] = grouped["H"] / grouped["AB"]
             grouped["OBP"] = (grouped["H"] + grouped["BB"] + grouped["HBP"]) / grouped["PA"]
             grouped["SLG"] = grouped["TB"] / grouped["AB"]
@@ -584,18 +584,18 @@ with main_tab4:
 
         else:  # pitcher
             df = df[(df["PC"] > 0)]
-            raw_stats = ["IP", "K", "HA", "BBA", "ER", "QS", "SVH", "TBF"]
+            raw_stats = ["IP", "OUT", "K", "HA", "BBA", "ER", "QS", "SVH", "TBF"]
             zscore_stats = ["K", "ERA", "WHIP", "K%-BB%", "QS", "SVH"]
 
-            df["ERA"] = df.apply(lambda r: r["ER"] / r["IP"] * 9 if r["IP"] > 0 else 0, axis=1)
-            df["WHIP"] = df.apply(lambda r: (r["HA"] + r["BBA"]) / r["IP"] if r["IP"] > 0 else 0, axis=1)
+            df["ERA"] = df.apply(lambda r: r["ER"] / r["OUT"]/3 * 9 if r["OUT"] > 0 else 0, axis=1)
+            df["WHIP"] = df.apply(lambda r: (r["HA"] + r["BBA"]) / r["OUT"]/3 if r["OUT"] > 0 else 0, axis=1)
             df["K%"] = df.apply(lambda r: r["K"] / r["TBF"] if r["TBF"] > 0 else 0, axis=1)
             df["BB%"] = df.apply(lambda r: r["BBA"] / r["TBF"] if r["TBF"] > 0 else 0, axis=1)
             df["K%-BB%"] = df["K%"] - df["BB%"]
 
-            grouped = df.groupby("player_name")[raw_stats].sum(min_count=1).reset_index()
-            grouped["ERA"] = grouped["ER"] / grouped["IP"] * 9
-            grouped["WHIP"] = (grouped["HA"] + grouped["BBA"]) / grouped["IP"]
+            grouped = df.groupby("Player")[raw_stats].sum(min_count=1).reset_index()
+            grouped["ERA"] = grouped["ER"] / grouped["OUT"]/3 * 9
+            grouped["WHIP"] = (grouped["HA"] + grouped["BBA"]) / grouped["OUT"]/3
             grouped["K%"] = grouped["K"] / grouped["TBF"]
             grouped["BB%"] = grouped["BBA"] / grouped["TBF"]
             grouped["K%-BB%"] = grouped["K%"] - grouped["BB%"]
@@ -612,16 +612,16 @@ with main_tab4:
 
         # Latest team info
         latest_team = (
-            df.sort_values("date")
-            .groupby("player_name")["team_name"]
+            df.sort_values("Date")
+            .groupby("Player")["Team"]
             .last()
             .reset_index()
-            .rename(columns={"team_name": "Current Team"})
+            .rename(columns={"Team": "Current Team"})
         )
 
         result = (
-            grouped[["player_name", "Score"] + zscore_stats]
-            .merge(latest_team, on="player_name", how="left")
+            grouped[["Player", "Score"] + zscore_stats]
+            .merge(latest_team, on="Player", how="left")
             .sort_values(by="Score", ascending=False)
             .head(20)
             .reset_index(drop=True)
@@ -638,25 +638,25 @@ with main_tab4:
     ])
 
     with tabs[0]:
-        df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-        df["date"] = df["date"].dt.date
+        df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["Date"])
+        df["Date"] = df["Date"].dt.date
         df = df[df["roster_slot"] != "BN"]
         st.dataframe(zscore_leaderboard(df, role="hitter"), use_container_width=True, hide_index=True)
 
     with tabs[1]:
-        df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-        df["date"] = df["date"].dt.date
+        df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["Date"])
+        df["Date"] = df["Date"].dt.date
         df = df[df["roster_slot"] == "BN"]
         st.dataframe(zscore_leaderboard(df, role="hitter", is_bench=True), use_container_width=True, hide_index=True)
 
     with tabs[2]:
-        df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-        df["date"] = df["date"].dt.date
+        df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["Date"])
+        df["Date"] = df["Date"].dt.date
         df = df[df["roster_slot"] != "BN"]
         st.dataframe(zscore_leaderboard(df, role="pitcher"), use_container_width=True, hide_index=True)
 
     with tabs[3]:
-        df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["date"])
-        df["date"] = df["date"].dt.date
+        df = pd.read_csv("daily_player_stats_wide.csv", parse_dates=["Date"])
+        df["Date"] = df["Date"].dt.date
         df = df[df["roster_slot"] == "BN"]
         st.dataframe(zscore_leaderboard(df, role="pitcher", is_bench=True), use_container_width=True, hide_index=True)
