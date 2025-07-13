@@ -17,8 +17,8 @@ def get_latest_csv_date(csv_file):
     df = pd.read_csv(csv_file)
     if df.empty:
         return None
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    return df['date'].max().date()
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    return df['Date'].max().date()
 
 #csv_cutoff_date = datetime(2025, 4, 10).date() #use this when I don't want to go all the way to current day
 csv_cutoff_date = datetime.today().date() - timedelta(days=1)
