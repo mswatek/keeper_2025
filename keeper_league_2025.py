@@ -121,7 +121,7 @@ with main_tab1:
     st.header("🏆 Overall Standings")
     st.markdown("This table shows the current standings and will keep track of 2nd half improvements. (Note: I made June 1st the cuttoff for the first half until we get past the All-Star Break)")
 
-    june_first = pd.to_datetime("2025-04-01")
+    june_first = pd.to_datetime("2025-07-01")
     latest_date = df["Date"].max()
 
     def compute_cumulative_roto(data, stats_subset):
