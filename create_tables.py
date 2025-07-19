@@ -20,7 +20,7 @@ def get_latest_csv_date(csv_file):
     df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
     return df['Date'].max().date()
 
-#csv_cutoff_date = datetime(2025, 4, 10).date() #use this when I don't want to go all the way to current day
+#csv_cutoff_date = datetime(2025, 3, 20).date() #use this when I don't want to go all the way to current day
 csv_cutoff_date = datetime.today().date() - timedelta(days=1)
 latest_in_csv = get_latest_csv_date(csv_path)
 
@@ -209,6 +209,8 @@ failed_attempts = {}
 player_stats = []
 final_retry_queue = []
 
+failed_entries = []  # List to store failure diagnostics
+
 def fetch_player_stats_with_retry(stat_url, headers):
     global rate_limit_triggered
     for attempt in range(1, MAX_RETRIES + 1):
@@ -280,7 +282,7 @@ def process_retry_queue(queue_name, queue):
 
         if failed_attempts[key] > MAX_RETRIES:
             print(f"⚠️ Skipping {player['name']} on {date_str} after {MAX_RETRIES} retries.")
-            log_failed_attempt(pid, player['name'], date_str, stat_url)
+            log_failed_attempt(pid, player['name'], date_str, stat_url, team_key)
             continue
 
         resp = fetch_player_stats_with_retry(stat_url, headers)
@@ -292,9 +294,14 @@ def process_retry_queue(queue_name, queue):
 
     return new_queue
 
-def log_failed_attempt(pid, name, date_str, url):
-    with open("failed_stat_urls.txt", "a") as log:
-        log.write(f"{pid},{name},{date_str},{url}\n")
+def log_failed_attempt(pid, name, date_str, url, team_key):
+    failed_entries.append({
+        "player_id": pid,
+        "player_name": name,
+        "date": date_str,
+        "stat_url": url,
+        "team_key": team_key
+    })
 
 # --- Looping through dates and teams ---
 current_date = start_from
@@ -346,6 +353,13 @@ while current_date <= end_at:
 if final_retry_queue:
     print(f"\n🔁 Final retry round for {len(final_retry_queue)} failures...")
     final_retry_queue = process_retry_queue("final_retry_queue", final_retry_queue)
+
+# 🔍 Export diagnostics CSV after all retries are complete
+if failed_entries:
+    failed_df = pd.DataFrame(failed_entries)
+    failed_df.to_csv("failed_player_stats.csv", index=False)
+    print(f"❌ Saved {len(failed_entries)} failed pulls to failed_player_stats.csv")
+
 
 # Save the final dataset
 player_df = pd.DataFrame(player_stats)
