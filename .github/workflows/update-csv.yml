@@ -2,7 +2,7 @@ name: Daily CSV Update
 
 on:
   schedule:
-    - cron: '0 8 * * *'  # Runs daily at 1:00 PDT
+    - cron: '0 17 * * *'  # Runs daily at 1:00 PDT
   workflow_dispatch:       # Allows manual trigger
 
 jobs:
@@ -28,7 +28,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add daily_player_stats_wide.csv daily_team_combined_stats.csv failed_player_stats.csv
+          git add daily_player_stats_wide.csv daily_team_combined_stats.csv
           git commit -m "Daily CSV updates: $(date -u +'%Y-%m-%d %H:%M:%S')"
           git push
         env:
