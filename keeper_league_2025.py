@@ -120,7 +120,7 @@ with main_tab2:
 with main_tab1:
 
     st.header("🏆 Overall Standings")
-    st.markdown("This table shows the current standings and will keep track of 2nd half improvements. (Note: The cut-off is pre- and post-July)")
+    st.markdown("This table shows the current standings and will keep track of 2nd half improvements")
 
     asb = pd.to_datetime("2025-07-18")
     latest_date = df["Date"].max()
