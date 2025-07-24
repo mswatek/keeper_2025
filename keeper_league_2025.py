@@ -9,7 +9,7 @@ from datetime import timedelta
 st.set_page_config(page_title="Keeper League Dashboard", layout="wide")
 
 # === Tabs ===
-main_tab1, main_tab2, main_tab3, main_tab4, main_tab5 = st.tabs(["🏆 League Summary", "📈 League Trends", "👥 Team Stats", "👤 Player Stats", "Playground"])
+main_tab1, main_tab2, main_tab3, main_tab4, main_tab5 = st.tabs(["🏆 League Summary", "📈 League Trends", "👥 Team Stats", "👤 Player Stats", "Experimental"])
 
 # === LEAGUE TRENDS TAB ===
 with main_tab2:
@@ -120,7 +120,7 @@ with main_tab2:
 with main_tab1:
 
     st.header("🏆 Overall Standings")
-    st.markdown("This table shows the current standings and will keep track of 2nd half improvements")
+    st.markdown("This table shows the current standings and will keep track of 2nd half improvements.")
 
     asb = pd.to_datetime("2025-07-18")
     latest_date = df["Date"].max()
@@ -664,7 +664,7 @@ with main_tab4:
 
 
 
-# === PLAYGROUND ===
+# === EXPERIMENTAL ===
 with main_tab5:
     st.subheader("🔍 Explore Player Stats")
     st.markdown("Select any two stat categories to visualize player performance.")
@@ -681,8 +681,9 @@ with main_tab5:
 
     stat_columns = [col for col in data_df.columns if col != "Player"]
 
-    x_axis = st.selectbox("📈 X-axis", stat_columns)
-    y_axis = st.selectbox("📉 Y-axis", stat_columns)
+    x_axis = st.selectbox("📈 X-axis", stat_columns, index=0)
+    filtered_y_options = [col for col in stat_columns if col != x_axis]
+    y_axis = st.selectbox("📉 Y-axis", filtered_y_options, index=0)
 
     # Clean NaNs
     plot_df = data_df[["Player", x_axis, y_axis]].dropna()
