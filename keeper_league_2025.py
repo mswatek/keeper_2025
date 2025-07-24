@@ -2,13 +2,14 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
 from datetime import timedelta
 
 # === Global setup ===
 st.set_page_config(page_title="Keeper League Dashboard", layout="wide")
 
 # === Tabs ===
-main_tab1, main_tab2, main_tab3, main_tab4 = st.tabs(["🏆 League Summary", "📈 League Trends", "👥 Team Stats", "👤 Player Stats"])
+main_tab1, main_tab2, main_tab3, main_tab4, main_tab5 = st.tabs(["🏆 League Summary", "📈 League Trends", "👥 Team Stats", "👤 Player Stats", "Playground"])
 
 # === LEAGUE TRENDS TAB ===
 with main_tab2:
@@ -119,9 +120,9 @@ with main_tab2:
 with main_tab1:
 
     st.header("🏆 Overall Standings")
-    st.markdown("This table shows the current standings and will keep track of 2nd half improvements. (Note: I made June 1st the cuttoff for the first half until we get past the All-Star Break)")
+    st.markdown("This table shows the current standings and will keep track of 2nd half improvements. (Note: The cut-off is pre- and post-July)")
 
-    june_first = pd.to_datetime("2025-07-01")
+    asb = pd.to_datetime("2025-07-18")
     latest_date = df["Date"].max()
 
     def compute_cumulative_roto(data, stats_subset):
@@ -170,15 +171,15 @@ with main_tab1:
     hitting_roto = compute_cumulative_roto(df, hitting_stats).rename(columns={"Roto Points": "Hitting Points"})
     pitching_roto = compute_cumulative_roto(df, pitching_stats).rename(columns={"Roto Points": "Pitching Points"})
 
-    # Before June 1st (First Half)
-    before_june = df[df["Date"] < june_first]
-    before_roto = compute_cumulative_roto(before_june, all_stats).rename(
+    # First Half
+    first_half = df[df["Date"] < asb]
+    before_roto = compute_cumulative_roto(first_half, all_stats).rename(
         columns={"Roto Points": "1st Half Points"}
     )
     
-    # Since June 1st (Second Half)
-    since_june = df[df["Date"] >= june_first]
-    june_roto = compute_cumulative_roto(since_june, all_stats).rename(columns={"Roto Points": "2nd Half Points"})
+    # Second Half
+    second_half = df[df["Date"] >= asb]
+    second_half_roto = compute_cumulative_roto(second_half, all_stats).rename(columns={"Roto Points": "2nd Half Points"})
 
 
 
@@ -193,7 +194,7 @@ with main_tab1:
         before_roto[["Team", "1st Half Points"]],
         on="Team"
     ).merge(
-        june_roto[["Team", "2nd Half Points"]],
+        second_half_roto[["Team", "2nd Half Points"]],
         on="Team"
     )
 
@@ -660,3 +661,84 @@ with main_tab4:
         df["Date"] = df["Date"].dt.date
         df = df[df["roster_slot"] == "BN"]
         st.dataframe(zscore_leaderboard(df, role="pitcher", is_bench=True), use_container_width=True, hide_index=True)
+
+
+
+# === PLAYGROUND ===
+with main_tab5:
+    st.subheader("🔍 Explore Player Stats")
+    st.markdown("Select any two stat categories to visualize player performance.")
+
+    # ➕ Stat toggle
+    stat_type = st.radio("Choose stat group:", ["Hitting + Fielding", "Pitching"])
+
+    if stat_type == "Pitching":
+        data_df = pitching_summary.copy()
+    else:
+        # Merge hitting and fielding without renaming
+        data_df = pd.merge(hitting_summary, fielding_summary, on="Player", how="outer")
+        data_df = data_df.loc[:, ~data_df.columns.duplicated()]  # Ensure unique column labels
+
+    stat_columns = [col for col in data_df.columns if col != "Player"]
+
+    x_axis = st.selectbox("📈 X-axis", stat_columns)
+    y_axis = st.selectbox("📉 Y-axis", stat_columns)
+
+    # Clean NaNs
+    plot_df = data_df[["Player", x_axis, y_axis]].dropna()
+
+    # 🔧 NumPy regression
+    x_vals = plot_df[x_axis].values.flatten()
+    y_vals = plot_df[y_axis].values.flatten()
+    slope, intercept = np.polyfit(x_vals, y_vals, 1)
+    trend_y = slope * x_vals + intercept
+
+    fig = go.Figure()
+
+    # 🎯 Scatterplot
+    fig.add_trace(go.Scatter(
+        x=x_vals,
+        y=y_vals,
+        mode="markers",
+        name="Players",
+        marker=dict(size=10, color="#636EFA", line=dict(width=1, color="DarkSlateGrey")),
+        hovertext=plot_df["Player"],
+        hoverinfo="text"
+    ))
+
+    # ➕ Trend Line
+    fig.add_trace(go.Scatter(
+        x=x_vals,
+        y=trend_y,
+        mode="lines",
+        name="Trend Line",
+        line=dict(color="gray", dash="dash")
+    ))
+
+   # 🏷️ Label top performers on Y and far-right on X
+    top_y = plot_df.sort_values(y_axis, ascending=False).head(3)
+    top_x = plot_df.sort_values(x_axis, ascending=False).head(3)
+    extremes = pd.concat([top_y, top_x]).drop_duplicates(subset="Player")
+
+    # Jitter label position to reduce overlap
+    offsets = [-40, -60, -80, -100, -50, -70]
+    for i, (_, row) in enumerate(extremes.iterrows()):
+        fig.add_annotation(
+            x=row[x_axis],
+            y=row[y_axis],
+            text=row["Player"],
+            showarrow=True,
+            arrowhead=1,
+            ax=0,
+            ay=offsets[i % len(offsets)]
+        )
+
+    fig.update_layout(
+        title=f"{x_axis} vs {y_axis} with Trend Line",
+        xaxis_title=x_axis,
+        yaxis_title=y_axis,
+        template="plotly_white",
+        margin=dict(l=40, r=40, t=60, b=40)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
